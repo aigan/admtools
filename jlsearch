@@ -1,0 +1,32 @@
+#!/usr/bin/perl
+
+*thing = \$ARGV[0];
+$|=1;
+
+open FILES, "find . -print|" or die;
+while (chop($file=<FILES>))
+{
+    next unless (!-z $file and -T _);
+    unless( $ARGV[1] ) # Exclude backups
+    {
+	next if $file =~ m(/CVS/);
+	next if $file =~ m/~$/;
+	next if $file =~ m(/\.\#);
+	next if $file =~ m(/\#);
+    }
+    open FILE, $file or next;
+#    print " - $file";
+    $nr=0;
+    while($row = <FILE>)
+    {
+	last if $row eq '';
+	$nr++;
+	if ($row =~ /$thing/)
+	{
+	    print "\n$file\n", '-' x length $file, "\n" if ++$found{$file}==1;
+	    printf "%5d: %s", $nr, $row;
+	}
+    }
+    close FILE;
+}
+print "\nEND\n\n";

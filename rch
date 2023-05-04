@@ -1,0 +1,117 @@
+#!/usr/bin/perl
+#Version 3.04
+
+use utf8;
+binmode(STDOUT, ":utf8");
+
+print "\nÄndra från ARGV[0] till ARGV[1] med flaggorn ARGV[2] i alla filer under ARGV[3]\n" if $#ARGV<2;
+
+if ($#ARGV<2)
+{
+    print 'Använd perl regexp. Dessa är metatecken: \^.$|()[]*+?{}'."'\n";
+    print "'/' är inte metatecken.\n";
+    print "Ändra från (avsluta med EOF (jag raderar avslutande radmatning)):\n";
+    $ARGV[0] .= $_ while <STDIN>;
+    chomp($ARGV[0]);
+
+    print "\$1, etc kan användas för att lägga in motsvarande matchning.\n";
+    print "Ändra till (avsluta med EOF (jag raderar avslutande radmatning)):\n";
+    $ARGV[1] .= $_ while <STDIN>;
+    chomp($ARGV[1]);
+
+    print "Substitutionen görs default med flaggorna g och m. Det betyder att\n";
+    print "'^' matchar varje radbörjan, '\$' matchar varje radslut och '.'\n";
+    print "matchar inga radmatningar.\n";
+    print "Här kan andra flaggor anges om så önskas: ";
+    chomp($ARGV[2]=<STDIN>);
+    $ARGV[2] ||= "gm";
+
+    print "Ändra under: "; chomp($ARGV[3]=<STDIN>);
+
+}
+
+$ARGV[0] =~ s!/!\\/!g;
+$ARGV[0] =~ s!\@!\\@!g;
+$ARGV[1] =~ s!/!\\/!g;
+$ARGV[1] =~ s!\@!\\@!g;
+
+print "\ts/$ARGV[0]/$ARGV[1]/$ARGV[2]\n";
+
+$::EXPR = eval "sub {(\${\$_[0]} =~ s/$ARGV[0]/$ARGV[1]/$ARGV[2])}";
+die $@ if $@;
+
+#print "sub {(\$\$_[0] =~ s/$ARGV[0]/$ARGV[1]/gm)}\n\n\n";
+#$var = "Eftersom han skrev i sin debattartikel...\n";
+#print "\nRes: ". &{$::EXPR}(\$var);
+#print "\nVal: ". $var;
+#print "\n\n";
+#exit;
+
+
+
+while( $file = <$ARGV[3]>)
+{
+    print "Nästa: $file\n";
+    if(-d $file)
+    {
+	print "Directory\n";
+	system("du $file | awk '{print \$2}' > /tmp/rch$$");
+	open(TMP, "/tmp/rch$$") || die;
+	while(chop($subdir = <TMP>))
+	{
+	    next if $subdir =~ /CVS$/;
+	    print "\t... $subdir\n";
+	    opendir(SUBDIR, $subdir) or 
+		warn "$0: Can't access $subdir: $!" && next;
+	    while($subfile = readdir(SUBDIR))
+	    {
+		&doit("$subdir/$subfile") unless 
+		    ($subfile =~ /\.$|~$/  or  -d "$subdir/$subfile");
+	    }
+	    closedir(SUBDIR);
+	}
+	close(TMP);
+	system("rm /tmp/rch$$");
+    }
+    else
+    {
+	print "No dir: $file\n";
+	&doit("$file") unless ($file =~ /\.$|\~$/);
+    }
+}
+
+sub doit
+{
+    unless( -T $_[0] )
+    {
+#	print "Skipping $_[0]\n";
+#	next;
+    }
+    
+    open(FILE,  $_[0]) or 
+	warn "$0: Can't read file $_[0]: $!\n" && next;
+    undef $/;
+    my $newfile=<FILE>;
+    $/="\n";
+    close FILE;
+
+
+    my $change = scalar &{$::EXPR}(\$newfile);
+    if ($change)
+    {
+	print "$_[0]: $change\n";
+#	return;
+	system("cp $_[0] $_[0]~");
+	open(NEWFILE, ">$_[0]") or 
+	    warn "$0: Can't write to $_[0]: $!\n" && return;
+        print NEWFILE $newfile;
+	close NEWFILE;
+    }
+    else
+    {
+	print "$_[0] not changed\n";
+    }
+}
+
+
+

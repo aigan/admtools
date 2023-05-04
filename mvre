@@ -1,0 +1,35 @@
+#!/usr/bin/perl
+#Version 0.1
+use utf8;
+
+if ($#ARGV<1)
+{
+    print "Ändra från: ";
+    chomp($ARGV[0] = <STDIN>);
+
+    print "Ändra till: ";
+    chomp($ARGV[1] = <STDIN>);
+}
+
+$from = $ARGV[0];
+$to   = $ARGV[1];
+
+print "[$from] [$to]\n";
+
+
+opendir DIR, '.' or die $!;
+
+while($file=readdir DIR)
+{
+#    warn "Considering $file\n";
+    next unless $file =~ /$from/;
+    $resfile = $file;
+#    warn "  replacing\n";
+    eval qq(\$resfile =~ s/$from/$to/);
+#    warn "  Got $resfile\n";
+
+    rename $file, $resfile or 
+	warn "mvre: coudn't move $file to $resfile: $!\n";
+}
+
+closedir DIR;

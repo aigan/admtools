@@ -1,0 +1,130 @@
+#!/usr/bin/perl -w
+use strict;
+
+use DateTime;
+use Mail::Address;
+use MIME::Words qw( encode_mimewords );
+
+
+my $usage = "Usage: mailstuff letter maillist\n";
+die $usage unless @ARGV==2;
+my( $letter, $maillist ) = @ARGV;
+
+#print "Usage: mailstuff $letter $maillist\n";
+
+open LETTER, $letter or die "Couldn't open $letter: $!\n";
+my $body_orig = join '', <LETTER>;
+close LETTER;
+
+my $Sendmail = "/usr/lib/sendmail";
+my @cmd = ($Sendmail, '-t', '-oi', '-oem');
+if( $body_orig =~ /From:.*?<(.*?)>/ )
+{
+    push @cmd, "-f$1";
+}
+else
+{
+    die "Sender not found";
+}
+
+
+open ML, "<:encoding(UTF-8)", $maillist or die "Couldn't open $maillist: $!\n";
+foreach my $row ( <ML> )
+{
+    my( $to ) = parse_email($row) or next;
+
+    my $to_email = $to->address;
+    my $to_format = format_email_mime($to);
+
+    my $now = DateTime->now->strftime('%a, %d %b %Y %T %z');
+
+    my $body = $body_orig;
+    $body =~ s/¤1¤/$to_format/g or die "To not found";
+    $body =~ s/¤2¤/$to_email/g;
+    $body =~ s/¤date¤/$now/g;
+
+    eval
+    {
+	### Open the command in a taint-safe fashion:
+	my $pid = open SENDMAIL, "|-";
+	defined($pid) or die "open of pipe failed: $!\n";
+	if(!$pid)    ### child
+	{
+	    print "Executing command @cmd\n";
+	    exec(@cmd) or die "can't exec $Sendmail: $!\n";
+	    ### NOTREACHED
+	}
+	else         ### parent
+	{
+	    print SENDMAIL $body;
+	    close SENDMAIL || die "error closing $Sendmail: $! (exit $?)\n";
+	}
+    };
+
+    if( $@ )
+    {
+	warn "$to_email failed: $@\n";
+    }
+    else
+    {
+	print $to_email."\n";
+    }
+
+    sleep 3;
+}
+close ML;
+print "Done!\n";
+
+
+sub format_email_mime
+{
+    my( $a ) = @_;
+
+    my $atext = '[\-\w !#$%&\'*+/=?^`{|}~]';
+
+    my $phrase = $a->phrase || $a->name || '';
+    my $addr = $a->address || '';
+    my $comment = $a->comment || '';
+    my @tmp = ();
+
+    if( length $phrase )
+    {
+#	push @tmp, $phrase =~ /^(?:\s*$atext\s*)+$/ ? $phrase
+#	  : $phrase =~ /(?<!\\)"/ 
+#	  ? encode_mimewords($phrase)
+#	  : '"'.encode_mimewords($phrase).'"';
+
+        push @tmp, encode_mimewords($phrase);
+
+
+	push(@tmp, "<" . $addr . ">") if length $addr;
+    }
+    else
+    {
+	push(@tmp, $addr) if length $addr;
+    }
+
+    $comment =~ s/^\s*\(?//;
+    $comment =~ s/\)?\s*$//;
+    if( $comment =~ /\S/ )
+    {
+	$comment = '('.encode_mimewords($comment).')';
+    }
+
+    push(@tmp, $comment) if length $comment;
+    return join " ", @tmp;
+}
+
+
+sub parse_email
+{
+    my( $email_str ) = @_;
+
+    $email_str =~ s/\p{Other}//g;
+    $email_str =~ s/( ^ \s+ | \s+ $ )//gx;
+    $email_str =~ s/\s*\r?\n\s*/\n/g;
+    $email_str =~ s/\s\s+/ /g;
+
+    return Mail::Address->parse( $email_str );
+}
+

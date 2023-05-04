@@ -1,0 +1,4 @@
+#!/usr/bin/perl
+use File::Find;
+if ($ARGV[0]){find( sub{unlink $_ if /~$/}, @ARGV)}
+else{print "rmba: removes alla ~ files in specified file trees.\n"}
