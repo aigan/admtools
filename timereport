@@ -1,0 +1,319 @@
+#!/usr/bin/perl -w
+use strict;
+
+our $db   = {};
+#
+# The format is $bd->{ $customer }{ $activity }{ $class }{ $person } = $hours
+#
+# $class    <--- PD, RD, U- or P-
+# $activity <--- #ticket or defined activity
+
+our $syntaxcheck = 0;
+
+my $usage = "Usage: timereport [person[,person[,...]] [year] STARTWEEK[-ENDWEEK] [STARTWEEK[-ENDWEEK][ ...]]\n\n";
+
+if( $ARGV[0] eq '-c' )
+{
+    shift @ARGV;
+    $syntaxcheck = 1;
+}
+
+die $usage unless $ARGV[0];
+
+my @persons;
+if( $ARGV[0] =~ /^\D/ )
+{
+#    print "Yes: $ARGV[0] \n";
+    @persons = split /,/, shift @ARGV;
+}
+else
+{
+    @persons = ( 'joli' );
+}
+
+my $year;
+if( $ARGV[0] =~ /^\d\d\d\d$/ )
+{
+    $year = shift @ARGV;
+}
+
+
+my @weeks;
+foreach my $week ( @ARGV )
+{
+    my( $startweek, $endweek ) = split /-/, $week;
+    $endweek ||= $startweek;
+#    print "SE: $startweek, $endweek\n";
+    push @weeks, ( $startweek .. $endweek );
+}
+
+die $usage unless @weeks;
+
+foreach my $person ( @persons )
+{
+    foreach my $week ( @weeks )
+    {
+	RIT::Timereport::import_data( $db, $person, $week, $year );
+    }
+}
+
+
+unless( $syntaxcheck )
+{
+    #
+    # Create report
+    #
+
+    my $sum = RIT::Timereport::sum_data( $db );
+
+    print underline("Rapport");
+
+    foreach my $customer ( sort keys %$sum )
+    {
+	next if $customer =~ /^_/;
+	printf "$customer: %5.1f\n", $sum->{$customer}{'_sum'};
+
+	foreach my $activity ( sort keys %{$sum->{$customer}} )
+	{
+	    next if $activity =~ /^_/;
+	    printf "\t$activity: %5.1f\n", $sum->{$customer}{$activity}{'_sum'};
+
+	    foreach my $class ( sort keys %{$sum->{$customer}{$activity}} )
+	    {
+		next if $class =~ /^_/;
+		printf "\t\t$class: %5.1f\n", $sum->{$customer}{$activity}{$class}{'_sum'};
+
+		foreach my $person ( sort keys %{$sum->{$customer}{$activity}{$class}} )
+		{
+		    next if $person =~ /^_/;
+		    printf "\t\t\t$person: %5.1f\n", $sum->{$customer}{$activity}{$class}{$person}{'_sum'};
+		}
+	    }
+	}
+    }
+    printf "Totalt: %5.1f\n", $sum->{'_sum'};
+    print "\n";
+}
+
+
+
+##############################################
+
+
+sub underline
+{
+    $_[0]."\n".('-'x length($_[0]))."\n\n";
+}
+
+
+##############################################
+
+package RIT::Timereport;
+
+use Date::Calc qw( Delta_DHMS Add_Delta_Days );
+
+
+sub import_data
+{
+    my( $time, $person, $week, $year ) = @_;
+
+    my $file = "/home/$person/public_html/tider";
+
+    if( $year )
+    {
+	$file .= "/$year";
+    }
+
+    $file .= "/v$week.txt";
+
+    open TF, $file or warn "Couldn't open $file: $!\n" and return undef;
+
+    my( @lymd, @cymd, %last, %current, $rowcnt );
+
+    while( my $row = <TF> )
+    {
+	$rowcnt++;
+	chomp $row;
+	$row =~ s/\r$//;
+	$row =~ s/\s*([\#\(].*)?//;
+
+	next unless length $row;
+	next if $row =~ /^\s*--/;
+
+	last if $row =~ /^(__END__|\)--)/;
+#	print "$row\n";
+
+	if( $row =~ /^(\d{4})-(\d{2})-(\d{2})/ )
+	{
+	    @lymd = ( $1, $2, $3 );
+	    @cymd = @lymd;
+	    %last = ();
+	}
+	elsif( $row =~ /^
+	       (\d\d)(\d\d)\s+
+	       (..)\s+
+	       (.*?)(\t\s*|\s\s+)
+	       (.*?)((\t\s*|\s\s+)
+		     (.*))?
+	       $/x
+	       )
+	{
+	    $current{'hour'}     = $1;
+	    $current{'minute'}   = $2;
+	    $current{'class'}    = $3;
+	    $current{'customer'} = $4;
+	    $current{'activity'} = $6;
+	    $current{'comment'}  = $8 || "";
+            $current{'person'} = $person;
+            $current{'week'} = $week;
+
+	    &validate( \%current, $row,  $rowcnt ) or next;
+
+	#print "$current{'activity'} --- $row\n";
+	    if( $current{'activity'} eq 'resa' )
+	    {
+		substr( $current{'class'}, 0, 1 ) = 'R';
+	    }
+
+	    if( $last{'class'} and $last{'class'} ne '--' )
+	    {
+		if( $current{'hour'} < $last{'hour'} )
+		{
+		    @cymd = Add_Delta_Days(@cymd, 1);
+		}
+		my( $dd, $dh, $dm, $ds ) = 
+		    Delta_DHMS(@lymd, $last{'hour'}, $last{'minute'}, 0,
+			       @cymd, $current{'hour'}, $current{'minute'}, 0 );
+
+		$time->{ $last{'customer'} }{ $last{'activity'} }{ $last{'class'} }{ $person } +=
+		    $dd*24+$dh+$dm/60;
+	    }
+	    %last = %current;
+	    @lymd = @cymd;
+	}
+	else
+	{
+	    warn "Malformed entry at $person week $week row $rowcnt:\n$row\n";
+	}
+    }
+    close TF;
+}
+
+sub validate
+{
+    my( $rec, $row, $rowcnt ) = @_;
+    my $week = $rec->{'week'};
+    my $person = $rec->{'person'};
+
+    if( $rec->{'hour'} > 24 )
+    {
+	warn"Hour out of range at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'minute'} >59 )
+    {
+	warn "Minute out of range at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'class'} !~ /^[PUR-][PD-]$/ )
+    {
+	warn "Class $rec->{'class'} malformed at $person week $week row $rowcnt (Must match /^[PUR-][D-]$/):\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'customer'} eq '' )
+    {
+	warn "Customer not specified at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'customer'} ne '-' and  $rec->{'class'} eq '--' )
+    {
+	warn "You must specify a class for the customer at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'customer'} eq '-' and  $rec->{'class'} ne '--' )
+    {
+	warn "You must specify a customer for the activity at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    if( $rec->{'activity'} eq '' )
+    {
+	warn "No activity specified at $person week $week row $rowcnt:\n$row\n";
+	return 0;
+    }
+
+    return 1;
+}
+
+sub sum_data
+{
+    my( $db ) = @_;
+
+    my $sum = {};
+
+    foreach my $customer ( keys %$db )
+    {
+	foreach my $activity ( keys %{$db->{$customer}} )
+	{
+	    foreach my $class ( keys %{$db->{$customer}{$activity}} )
+	    {
+		foreach my $person ( keys %{$db->{$customer}{$activity}{$class}} )
+		{
+		    my $hours = $db->{$customer}{$activity}{$class}{$person};
+
+		    $sum->{$customer}{$activity}{$class}{$person}{'_sum'} += $hours;
+		    $sum->{$customer}{$activity}{$class}{'_sum'} += $hours;
+		    $sum->{$customer}{$activity}{'_sum'} += $hours;
+		    $sum->{$customer}{'_sum'} += $hours;
+		    $sum->{'_sum'} += $hours;
+		}
+	    }
+	}
+    }
+    return $sum;
+}
+
+##############################################
+
+=head1 timereport
+
+Exempel:
+
+Rapportera allt detta året:     timereport 01-22
+
+Bara för jonas            :     timereport jonas 01-22
+
+För jonas och vots        :     timereport jonas,vots 01-22
+
+För jonas vecka 8 och 19  :     timereport jonas 8 19
+
+För alla, vecka 20        :     timereport 20
+
+
+
+Försök använd samma sätt att skriva kunder och aktiviteter.  Använd
+domännamnet för en kund.  "Hotel Vasa" blir "hotelvasa" även om kunden
+ännu inte har den domänen...
+
+Tickets anges i formatet #123.  Från och med vecka 19 (2001) började
+vi använda RT2.  Tickets innan denna period har "felaktiga" nummer
+(från RT1).
+
+
+Tidsrapporten måste ligga på angivet ställe och ha det angivna namnet.
+Filen får lov att ha extra kommentarer med '#' i början, eller blanka
+rader.
+
+Jag har supportat senseis () genom att likställa '(' med '#' (inte helt
+bra) samt genom att sluta processa efter /^\)--/.
+
+För att det ska fungera måste alltid datum anges (0-paddade månader och
+dagar). 
+Klassen '--' ignoreras, oavsett kund.
+
+=cut
